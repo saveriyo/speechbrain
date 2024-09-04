@@ -257,12 +257,12 @@ class WavTokenizerWrapper:
         # with torch.no_grad():
         x = self.convert_audio(x, self.input_sample_rate, self.tokenizer_sample_rate, 1)
     
-        # If you want to remove batch and channel dimensions for the audio data tensor
-        x = x.squeeze()  # Remove dimensions of size 1
+        # Remove channel dimensions for the audio data tensor
+        x = x.squeeze(1)
         
         # Generate features and discrete codes
         bandwidth_id = torch.tensor([0]).to(x.device)
-        features, discrete_code = self.model.encode_infer(x.unsqueeze(0), bandwidth_id=bandwidth_id)
+        features, discrete_code = self.model.encode_infer(x, bandwidth_id=bandwidth_id)
 
         return features, original_length
     

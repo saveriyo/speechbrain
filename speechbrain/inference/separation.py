@@ -125,3 +125,63 @@ class SepformerSeparation(Pretrained):
     def forward(self, mix):
         """Runs separation on the input mix"""
         return self.separate_batch(mix)
+
+
+class CodecformerSeparation(Pretrained):
+    MODULES_NEEDED = ["sepmodel", "dacmodel"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.mods.to(self.device)
+        self.hparams.dacmodel.model.to(self.device)
+        self.hparams.dacmodel.dac_sampler.to(self.device)
+        self.hparams.dacmodel.org_sampler.to(self.device)
+
+    def separate_batch(self, mix):
+        mix = mix.to(self.device)
+
+        mix_w, mix_length = self.hparams.dacmodel.get_encoded_features(mix.unsqueeze(1))
+        mix_w = mix_w.to(self.device)
+
+        est_mask = self.mods.sepmodel(mix_w)
+
+        mix_w = torch.stack([mix_w] * self.hparams.num_spks)
+        mix_s = mix_w * est_mask
+
+        est_sources = torch.cat(
+            [
+                self.hparams.dacmodel.get_decoded_signal(mix_s[i], mix_length).unsqueeze(0)
+                for i in range(self.hparams.num_spks)
+            ],
+            dim=0,
+        )
+
+        est_sources = est_sources.squeeze(2).permute(1, 2, 0)
+        T_origin = mix.size(1)
+        T_est = est_sources.size(1)
+        if T_origin > T_est:
+            est_sources = F.pad(est_sources, (0, 0, 0, T_origin - T_est))
+        else:
+            est_sources = est_sources[:, :T_origin, :]
+
+        return est_sources
+
+    def separate_file(self, path, savedir="audio_cache"):
+        batch, fs_file = torchaudio.load(path)
+        batch = batch.to(self.device)
+        fs_model = self.hparams.sample_rate
+
+        if fs_file != fs_model:
+            tf = torchaudio.transforms.Resample(
+                orig_freq=fs_file, new_freq=fs_model
+            ).to(self.device)
+            batch = batch.mean(dim=0, keepdim=True)
+            batch = tf(batch)
+
+        est_sources = self.separate_batch(batch)
+        est_sources = est_sources / est_sources.abs().max(dim=1, keepdim=True)[0]
+        return est_sources
+
+    def forward(self, mix):
+        return self.separate_batch(mix)
