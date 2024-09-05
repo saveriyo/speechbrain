@@ -576,6 +576,17 @@ def dataio_prep(hparams):
         replacements={"data_root": hparams["data_folder"]},
     )
 
+    file_limits = hparams.get("file_limits", {"train": None, "valid": None, "test": None})
+
+    if file_limits.get("train") is not None:
+        train_data = train_data.filtered_sorted(select_n=file_limits["train"])
+
+    if file_limits.get("valid") is not None:
+        valid_data = valid_data.filtered_sorted(select_n=file_limits["valid"])
+
+    if file_limits.get("test") is not None:
+        test_data = test_data.filtered_sorted(select_n=file_limits["test"])
+
     datasets = [train_data, valid_data, test_data]
 
     # 2. Provide audio pipelines

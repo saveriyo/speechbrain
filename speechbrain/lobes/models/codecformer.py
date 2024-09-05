@@ -119,7 +119,7 @@ class DACWrapper():
         return out
 
 class simpleSeparator2(nn.Module):
-    def __init__(self, num_spks, channels, block, block_channels):
+    def __init__(self, num_spks, channels, block, block_channels, activation=None):
         super(simpleSeparator2, self).__init__()
         self.num_spks = num_spks 
         self.channels = channels #this is dependent on the dac model
@@ -129,7 +129,10 @@ class simpleSeparator2(nn.Module):
         #self.time_mix = nn.Conv1d(channels,channels,1,bias=False)
         self.masker = weight_norm(nn.Conv1d(channels, channels*num_spks, 1, bias=False))
 
-        self.activation = Snake1d(channels) #nn.Tanh() #nn.ReLU() #Snake1d(channels)
+        if not activation:
+            self.activation = Snake1d(channels) #nn.Tanh() #nn.ReLU() #Snake1d(channels)
+        else:
+            self.activation = activation
         # gated output layer
         self.output = nn.Sequential(
             nn.Conv1d(channels, channels, 1), Snake1d(channels) #nn.Tanh() #, Snake1d(channels)#

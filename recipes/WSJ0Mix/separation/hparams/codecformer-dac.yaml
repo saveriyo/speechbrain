@@ -12,7 +12,7 @@ __set_seed: !apply:torch.manual_seed [1234]
 
 # Data params
 # your base folder where this repo and other relevant files/repos are stored
-base_folder: /yourpath
+base_folder: /teamspace/studios/this_studio
 # experiment folder name to generate in -/separation/results
 experiment_name: codecformer/DAC_original_L4nq
 
@@ -33,6 +33,12 @@ train_data: !ref <save_folder>/wsj_tr.csv
 valid_data: !ref <save_folder>/wsj_cv.csv
 test_data: !ref <save_folder>/wsj_tt.csv
 skip_prep: false
+# optionally specify the number of files to use for training, validation, and testing
+# comment out to use all files
+# file_limits: 
+#   train: 1000
+#   valid: 100
+#   test: 100
 
 
 # Experiment params
@@ -130,13 +136,13 @@ block: !new:speechbrain.lobes.models.dual_path.SBTransformerBlock
   use_positional_encoding: true
   norm_before: true
 
-dacmodel: !new:speechbrain.lobes.models.codecformer3.DACWrapper
+dacmodel: !new:speechbrain.lobes.models.codecformer.DACWrapper
   input_sample_rate: 8000
   DAC_model_path:   #if None, will download model from huggingface. Otherwise, path to checkpoint should be provided for the model to be loaded. Model has been hardcoded to download the 16khz model. please modify the code if you need another model.
   DAC_sample_rate: 16000
   Freeze: true
 
-sepmodel: !new:speechbrain.lobes.models.codecformer3.simpleSeparator2
+sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparator2
         # dacmodel: !ref <dacmodel>
   num_spks: 2
   channels: 1024
