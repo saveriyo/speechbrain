@@ -142,7 +142,6 @@ class simpleSeparator2(nn.Module):
         )
 
     def forward(self,x):
-        x = x.clone()
         x = self.ch_down(x)
         #[B,N,L]
         x = x.permute(0,2,1)
