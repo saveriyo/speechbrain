@@ -176,9 +176,9 @@ class WavTokenizerWrapper:
     '''
     Wrapper model for WavTokenizer
     '''
-    def __init__(self, input_sample_rate=24000, model_config_path=None, model_ckpt_path=None, tokenizer_sample_rate=24000, Freeze=True):
+    def __init__(self, input_sample_rate=8000, model_config_path=None, model_ckpt_path=None, tokenizer_sample_rate=24000, Freeze=True):
         '''
-        input_sample_rate: defaults to 24000 as it's the standard for WavTokenizer
+        input_sample_rate: defaults to 8000 as expected file input
         model_config_path: Path to the config file for WavTokenizer
         model_ckpt_path: Path to the checkpoint file for WavTokenizer
         tokenizer_sample_rate: defaults to 24000. Specify if using a model with a different sample rate.
@@ -207,27 +207,6 @@ class WavTokenizerWrapper:
         else:
             print(f'Model with {count_all_parameters(self.model)/1000000:.2f}M trainable parameters loaded')
 
-    def convert_audio(self, wav: torch.Tensor, sr: int, target_sr: int, target_channels: int):
-        '''
-        Converts audio to the desired sample rate and channels.
-        '''
-        assert wav.dim() >= 2, "Audio tensor must have at least 2 dimensions"
-        assert wav.shape[-2] in [1, 2], "Audio must be mono or stereo."
-        *shape, channels, length = wav.shape
-        
-        if target_channels == 1:
-            wav = wav.mean(-2, keepdim=True)
-        elif target_channels == 2:
-            wav = wav.expand(*shape, target_channels, length)
-        elif channels == 1:
-            wav = wav.expand(target_channels, -1)
-        else:
-            raise RuntimeError(f"Impossible to convert from {channels} to {target_channels}")
-        
-        # Perform the resampling
-        wav = torchaudio.transforms.Resample(sr, target_sr).to(wav.device)(wav)
-        return wav
-
     def resample_audio(self, x, condition):
         '''
         Resample the audio according to the condition.
@@ -236,14 +215,16 @@ class WavTokenizerWrapper:
         '''
         device = x.device
 
-        assert len(x.shape) == 3
+        assert len(x.shape) == 3, "Input tensor must have 3 dimensions [Batch, Channels, Time]"
         B, C, T = x.shape
-        assert C == 1  # The model should only handle single channel
+        assert C == 1, "Input tensor must be mono-channel [Batch, 1, Time]"
 
         if condition == "tokenizer":
             x_resamp = self.dac_sampler(x)
         elif condition == "org":
             x_resamp = self.org_sampler(x)
+        else:
+            raise ValueError("Unknown condition for resampling: {}".format(condition))
         
         x_resamp = x_resamp / torch.max(x_resamp.abs(), dim=2, keepdim=True)[0]
 
@@ -255,36 +236,47 @@ class WavTokenizerWrapper:
         '''
         original_length = x.shape[-1]
 
-        # Ensure the tensor has the right format
-        # with torch.no_grad():
-        x = self.convert_audio(x, self.input_sample_rate, self.tokenizer_sample_rate, 1)
+        # Resample the audio to the tokenizer's sample rate
+        x = self.resample_audio(x, "tokenizer")
     
         # Remove channel dimensions for the audio data tensor
         x = x.squeeze(1)
         
         # Generate features and discrete codes
         bandwidth_id = torch.tensor([0]).to(x.device)
-        features, discrete_code = self.model.encode_infer(x, bandwidth_id=bandwidth_id)
-
+        features, _, _ = self.model.feature_extractor(x, bandwidth_id=bandwidth_id)
         return features, original_length
     
-    def get_quantized_features(self, x):
+    def get_quantized_features(self, x, bandwidth_id=None):
         '''
-        Expects input [B, D, T] where D is the encoded continuous representation of input
+        Expects input [B, D, T] where D is the encoded continuous representation of input.
+        Returns quantized features, codes, latents, commitment loss, and codebook loss in the same format as DACWrapper.
         '''
-        # Ensure the tensor has 3 dimensions [Batch, Channels, Time]
-        if x.ndim == 2:
-            x = x.unsqueeze(1)  # Add a channel dimension if missing
+        if bandwidth_id is None:
+            bandwidth_id = torch.tensor([0]).to(x.device)
 
-        # Directly feed the encoded features to the quantizer
-        # with torch.no_grad():
-        q_res = self.model.feature_extractor.encodec.quantizer.infer(x, frame_rate=self.model.feature_extractor.frame_rate, bandwidth=self.model.feature_extractor.bandwidths[0])
+        # Ensure the tensor has 3 dimensions [Batch, Channels, Time]
+        if x.ndim != 3:
+            raise ValueError(f"Expected input to have 3 dimensions [Batch, Channels, Time], but got {x.ndim} dimensions.")
+
+        # Perform the quantization directly on the encoded features
+        q_res = self.model.feature_extractor.encodec.quantizer(
+            x, 
+            frame_rate=self.model.feature_extractor.frame_rate, 
+            bandwidth=self.model.feature_extractor.bandwidths[bandwidth_id]
+        )
+
+        # Extract necessary outputs
         quantized = q_res.quantized
         codes = q_res.codes
+        latents = x  # The input x itself is the latent representation after encoding
         commit_loss = q_res.penalty
 
-        # Return the outputs to match the format expected by the rest of your code
-        return quantized, codes, None, commit_loss, None
+        # Placeholder for codebook_loss (not directly available, could be None)
+        codebook_loss = None
+
+        # Return the outputs in the expected format
+        return quantized, codes, latents, commit_loss, codebook_loss
 
     def get_decoded_signal(self, features, original_length):
         '''
@@ -293,7 +285,6 @@ class WavTokenizerWrapper:
         # Decode the features to get the waveform
         bandwidth_id = torch.tensor([0]).to(features.device)
 
-        # with torch.no_grad():
         x = self.model.backbone(features, bandwidth_id=bandwidth_id)
         y_hat = self.model.head(x)
 
@@ -315,4 +306,3 @@ class WavTokenizerWrapper:
                 y_hat_resampled = y_hat_resampled[:, :, :T_origin]
 
         return y_hat_resampled
-
