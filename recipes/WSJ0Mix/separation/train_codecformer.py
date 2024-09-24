@@ -90,33 +90,35 @@ class Separation(sb.Brain):
         # Run Targets Through Codec #
         #############################
         
-        #targets come in as [batch, time, spks]
-        #we need to process the speech one speaker at a time
-        targ = targets.permute(2,0,1).unsqueeze(-2)
-        # targ is now [spk, batch, channel, time]
+        # #targets come in as [batch, time, spks]
+        # #we need to process the speech one speaker at a time
+        # targ = targets.permute(2,0,1).unsqueeze(-2)
+        # # targ is now [spk, batch, channel, time]
         
-        #encoding step
-        targs = [self.hparams.dacmodel.get_encoded_features(targ[i]) for i in range(self.hparams.num_spks)]
-        targ_w = torch.cat([item[0].unsqueeze(0) for item in targs],dim=0)
-        targ_lengths = torch.tensor([item[1] for item in targs])
+        # #encoding step
+        # targs = [self.hparams.dacmodel.get_encoded_features(targ[i]) for i in range(self.hparams.num_spks)]
+        # targ_w = torch.cat([item[0].unsqueeze(0) for item in targs],dim=0)
+        # targ_lengths = torch.tensor([item[1] for item in targs])
         
-        #quantizatio step
-        targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
-        targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]
-        targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
+        # #quantizatio step
+        # targ_qw = [self.hparams.dacmodel.get_quantized_features(targ_w[i]) for i in range(self.hparams.num_spks)]
+        # targ_q = torch.cat([item[0].unsqueeze(0) for item in targ_qw],dim=0) #[spks, B, N, L]
+        # targ_q_codes = torch.cat([item[1].unsqueeze(0) for item in targ_qw],dim=0)
     
-        #decoding step
-        targets_transmitted = torch.cat(
-            [
-                self.hparams.dacmodel.get_decoded_signal(targ_q[i],targ_lengths[i]).unsqueeze(0)
-                for i in range(self.hparams.num_spks)
-            ],
-            dim=0,
-        )
+        # #decoding step
+        # targets_transmitted = torch.cat(
+        #     [
+        #         self.hparams.dacmodel.get_decoded_signal(targ_q[i],targ_lengths[i]).unsqueeze(0)
+        #         for i in range(self.hparams.num_spks)
+        #     ],
+        #     dim=0,
+        # )
 
-        #get targets back to original dimensions [batch, time, spks]
-        targets_transmitted = targets_transmitted.squeeze(2).permute(1,2,0)
+        # #get targets back to original dimensions [batch, time, spks]
+        # targets_transmitted = targets_transmitted.squeeze(2).permute(1,2,0)
         
+        targets_transmitted, targ_w, targ_q, targ_q_codes = None, None, None, None
+
         ##############
         # Separation #
         ##############

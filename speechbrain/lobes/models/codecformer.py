@@ -8,6 +8,9 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 from dac.nn.layers import Snake1d
 from wavtokenizer.decoder.pretrained import WavTokenizer
+from transformers import MimiModel, AutoFeatureExtractor
+from typing import Optional, Tuple, List
+import numpy as np
 
 class DACWrapper():
     '''
@@ -306,3 +309,119 @@ class WavTokenizerWrapper:
                 y_hat_resampled = y_hat_resampled[:, :, :T_origin]
 
         return y_hat_resampled
+
+class MimiWrapper(nn.Module):
+    def __init__(self, input_sample_rate=8000, mimi_model_name="kyutai/mimi", Freeze=False, code_length=32):
+        super(MimiWrapper, self).__init__()
+        self.input_sample_rate = input_sample_rate
+        self.model = MimiModel.from_pretrained(mimi_model_name)
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(mimi_model_name)
+        self.mimi_sample_rate = self.feature_extractor.sampling_rate
+        self.code_length = code_length  # Should match the encoder's code_length (32)
+
+        # Initialize resamplers if needed
+        if self.input_sample_rate != self.mimi_sample_rate:
+            self.dac_sampler = T.Resample(orig_freq=self.input_sample_rate, new_freq=self.mimi_sample_rate)
+            self.org_sampler = T.Resample(orig_freq=self.mimi_sample_rate, new_freq=self.input_sample_rate)
+        else:
+            self.dac_sampler = None
+            self.org_sampler = None
+
+        # Freeze model parameters if specified
+        if Freeze:
+            for param in self.model.parameters():
+                param.requires_grad = False
+        else:
+            for param in self.model.parameters():
+                param.requires_grad = True
+
+    def resample_audio(self, x: torch.Tensor, to_mimi: bool = True) -> torch.Tensor:
+        """
+        Resamples audio to Mimi's sampling rate or back to the original rate.
+        
+        Args:
+            x (torch.Tensor): Input audio tensor of shape [Batch, Channels, Time].
+            to_mimi (bool): If True, resamples to Mimi's sampling rate; otherwise, resamples back.
+        
+        Returns:
+            torch.Tensor: Resampled audio.
+        """
+        if to_mimi and self.dac_sampler:
+            return self.dac_sampler(x)
+        elif not to_mimi and self.org_sampler:
+            return self.org_sampler(x)
+        return x
+
+    def get_encoded_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, int]:
+        """
+        Encodes input audio into continuous latent embeddings.
+        
+        Args:
+            x (torch.Tensor): Input audio tensor of shape [Batch, Channels, Time].
+        
+        Returns:
+            Tuple[torch.Tensor, int]: Tuple containing the continuous latents and the original audio length.
+        """
+        original_length = x.shape[-1]
+        device = x.device
+
+        x = self.resample_audio(x, to_mimi=True).to(device)
+
+        inputs = self.feature_extractor(
+            raw_audio=x.squeeze().cpu().numpy(), 
+            sampling_rate=self.mimi_sample_rate, 
+            return_tensors="pt"
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            embeddings = self.model.encoder(inputs["input_values"])  # [Batch, Hidden, Time]
+            encoder_outputs = self.model.encoder_transformer(
+                embeddings.transpose(1, 2), past_key_values=None, return_dict=True
+            )
+            embeddings = encoder_outputs[0].transpose(1, 2)  # [Batch, Hidden, Time]
+            embeddings = self.model.downsample(embeddings)  # [Batch, Hidden, Downsampled_Time]
+            continuous_latents = embeddings  # [Batch, Hidden_Size, Encoded_Length]
+
+        return continuous_latents, original_length
+
+    def get_decoded_signal(self, continuous_latents: torch.Tensor, original_length: int) -> torch.Tensor:
+        """
+        Decodes continuous latent embeddings back into audio.
+        
+        Args:
+            continuous_latents (torch.Tensor): Continuous latents of shape [Batch, Hidden_Size, Encoded_Length].
+            original_length (int): The original length of the input audio.
+        
+        Returns:
+            torch.Tensor: Decoded audio tensor of shape [Batch, 1, Time].
+        """
+
+        with torch.no_grad(): 
+            codes = self.model.quantizer.encode(continuous_latents).transpose(0,1)
+            embeddings = self.model.quantizer.decode(codes)
+            embeddings = self.model.upsample(embeddings)
+
+            decoder_outputs = self.model.decoder_transformer(
+                embeddings.transpose(1, 2), past_key_values=None, return_dict=True
+            )
+            embeddings = decoder_outputs[0].transpose(1, 2)
+            decoded_audio = self.model.decoder(embeddings)
+
+        decoded_audio = self.resample_audio(decoded_audio, to_mimi=False)
+
+        if decoded_audio.shape[-1] != original_length:
+            if decoded_audio.shape[-1] > original_length:
+                decoded_audio = decoded_audio[..., :original_length]
+            else:
+                padding = original_length - decoded_audio.shape[-1]
+                decoded_audio = F.pad(decoded_audio, (0, padding))
+
+        if decoded_audio.dim() == 2:
+            decoded_audio = decoded_audio.unsqueeze(1)
+        elif decoded_audio.dim() == 3 and decoded_audio.size(1) != 1:
+            decoded_audio = decoded_audio.mean(dim=1, keepdim=True)
+
+        decoded_audio.requires_grad = True
+
+        return decoded_audio
