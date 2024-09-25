@@ -310,6 +310,69 @@ class WavTokenizerWrapper:
 
         return y_hat_resampled
 
+class simpleSeparatorMimi(nn.Module):
+    def __init__(self, num_spks, channels, block, block_channels, activation=None):
+        """
+        Simple separator model for use with MimiWrapper, with the same interface as simpleSeparator2.
+
+        Args:
+            num_spks: Number of speakers to separate.
+            channels: Number of channels (latent dimensions from MimiWrapper).
+            block: The seq2seq model or processing block to use for the separation.
+            block_channels: Number of channels to use in the intermediate processing layers.
+            activation: The activation function to use (optional).
+        """
+        super(simpleSeparatorMimi, self).__init__()
+        self.num_spks = num_spks 
+        self.channels = channels  # Latent dimension from MimiWrapper
+        self.block = block  # Sequence processing model (e.g., transformer or LSTM)
+        self.ch_down = nn.Conv1d(channels, block_channels, 1, bias=False)  # Downsample latent dimension to block channels
+        self.ch_up = nn.Conv1d(block_channels, channels, 1, bias=False)  # Upsample back to latent dimension
+
+        self.masker = weight_norm(nn.Conv1d(channels, channels * num_spks, 1, bias=False))  # Mask layer for separation
+
+        if not activation:
+            self.activation = Snake1d(channels)  # Default activation function
+        else:
+            self.activation = activation
+
+        # Gated output layers
+        self.output = nn.Sequential(
+            nn.Conv1d(channels, channels, 1), Snake1d(channels)
+        )
+        self.output_gate = nn.Sequential(
+            nn.Conv1d(channels, channels, 1), nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        """
+        Forward pass of the separator.
+        
+        Args:
+            x: The input tensor in the shape [Batch, Channels, Time] (latent features from MimiWrapper).
+
+        Returns:
+            Separated latent representations for each speaker in shape [spks, B, Channels, Time].
+        """
+        x = self.ch_down(x)  # Downsample channels to match block input
+        x = x.permute(0, 2, 1)  # Permute to [Batch, Time, Channels] for block processing
+        x_b = self.block(x)  # Process through block (sequence-to-sequence model)
+        x_b = x_b.permute(0, 2, 1)  # Permute back to [Batch, Channels, Time]
+        x = self.ch_up(x_b)  # Upsample back to original latent dimension
+
+        B, N, L = x.shape  # B: Batch, N: Channels, L: Time
+        masks = self.masker(x)  # Create separation masks
+        masks = masks.view(B * self.num_spks, -1, L)  # Reshape for multiple speakers
+
+        x = self.output(masks) * self.output_gate(masks)  # Apply output and gate
+        x = self.activation(x)  # Apply activation function
+
+        x = x.view(B, self.num_spks, N, L)  # Reshape to [Batch, num_spks, Channels, Time]
+        x = x.transpose(0, 1)  # Transpose to [spks, B, Channels, Time] for output
+
+        return x
+
+
 class MimiWrapper(nn.Module):
     def __init__(self, input_sample_rate=8000, mimi_model_name="kyutai/mimi", Freeze=False, code_length=32):
         super(MimiWrapper, self).__init__()
@@ -365,51 +428,52 @@ class MimiWrapper(nn.Module):
         original_length = x.shape[-1]
         device = x.device
 
+        # Resample the input to Mimi's sample rate
         x = self.resample_audio(x, to_mimi=True).to(device)
 
+        # Extract features for each batch element using the feature extractor
+        batch_size = x.shape[0]
         inputs = self.feature_extractor(
-            raw_audio=x.squeeze().cpu().numpy(), 
-            sampling_rate=self.mimi_sample_rate, 
-            return_tensors="pt"
+            raw_audio=x.squeeze().cpu(),  # Extract batch of audio
+            sampling_rate=self.mimi_sample_rate,
+            return_tensors="pt",
+            padding=True
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            embeddings = self.model.encoder(inputs["input_values"])  # [Batch, Hidden, Time]
+            embeddings = self.model.encoder(inputs["input_values"])
             encoder_outputs = self.model.encoder_transformer(
-                embeddings.transpose(1, 2), past_key_values=None, return_dict=True
+                embeddings.transpose(1, 2), return_dict=False
             )
-            embeddings = encoder_outputs[0].transpose(1, 2)  # [Batch, Hidden, Time]
-            embeddings = self.model.downsample(embeddings)  # [Batch, Hidden, Downsampled_Time]
-            continuous_latents = embeddings  # [Batch, Hidden_Size, Encoded_Length]
+            embeddings = encoder_outputs[0].transpose(1, 2)
+            embeddings = self.model.downsample(embeddings)
+            continuous_latents = embeddings
+            # codes = self.model.quantizer.encode(continuous_latents).transpose(0, 1)
 
         return continuous_latents, original_length
 
-    def get_decoded_signal(self, continuous_latents: torch.Tensor, original_length: int) -> torch.Tensor:
+    def get_decoded_signal(self, x: torch.Tensor, original_length: int) -> torch.Tensor:
         """
-        Decodes continuous latent embeddings back into audio.
-        
-        Args:
-            continuous_latents (torch.Tensor): Continuous latents of shape [Batch, Hidden_Size, Encoded_Length].
-            original_length (int): The original length of the input audio.
-        
-        Returns:
-            torch.Tensor: Decoded audio tensor of shape [Batch, 1, Time].
+        expects input [B, D, T] where D is the Quantized continuous representation of input
+        original length is the original length of the input audio
         """
-
         with torch.no_grad(): 
-            codes = self.model.quantizer.encode(continuous_latents).transpose(0,1)
-            embeddings = self.model.quantizer.decode(codes)
+            continuous_latents = self.model.quantizer.decode(x)
+            embeddings = continuous_latents
             embeddings = self.model.upsample(embeddings)
 
             decoder_outputs = self.model.decoder_transformer(
-                embeddings.transpose(1, 2), past_key_values=None, return_dict=True
+                embeddings.transpose(1, 2), return_dict=False
             )
             embeddings = decoder_outputs[0].transpose(1, 2)
             decoded_audio = self.model.decoder(embeddings)
 
+        # decoded_audio = self.model.decode(x)["audio_values"]
+
         decoded_audio = self.resample_audio(decoded_audio, to_mimi=False)
 
+        # Ensure the decoded audio matches the original length
         if decoded_audio.shape[-1] != original_length:
             if decoded_audio.shape[-1] > original_length:
                 decoded_audio = decoded_audio[..., :original_length]
@@ -417,11 +481,21 @@ class MimiWrapper(nn.Module):
                 padding = original_length - decoded_audio.shape[-1]
                 decoded_audio = F.pad(decoded_audio, (0, padding))
 
-        if decoded_audio.dim() == 2:
-            decoded_audio = decoded_audio.unsqueeze(1)
-        elif decoded_audio.dim() == 3 and decoded_audio.size(1) != 1:
-            decoded_audio = decoded_audio.mean(dim=1, keepdim=True)
-
         decoded_audio.requires_grad = True
-
+        
         return decoded_audio
+
+    def get_quantized_features(self, x, bandwidth_id=None):
+        '''
+        Expects input [B, D, T] where D is the encoded continuous representation of input.
+        Returns quantized features, codes, latents, commitment loss, and codebook loss in the same format as DACWrapper.
+        '''
+
+        # Perform the quantization directly on the encoded features
+        quantized = self.model.quantizer.encode(x).transpose(0, 1)
+        codes = quantized
+        latents = x
+        commit_loss = None
+        codebook_loss = None
+
+        return quantized, codes, latents, commit_loss, codebook_loss

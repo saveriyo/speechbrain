@@ -13,7 +13,7 @@ __set_seed: !apply:torch.manual_seed [1234]
 # your base folder where this repo and other relevant files/repos are stored
 base_folder: /home/sam/Workspace/exploration/benchmarks
 # experiment folder name to generate in -/separation/results
-experiment_name: codecformer/mimi-wrapper
+experiment_name: codecformer/mimi
 
 # e.g. '/yourpath/wsj0-mix/2speakers'
 # end with 2speakers for wsj0-2mix or 3speakers for wsj0-3mix
@@ -47,12 +47,12 @@ save_audio: true # Save estimated sources on disk
 n_audio_to_save: 5
 sample_rate: 8000
 quantize_before: false
-quantize_after: false
+quantize_after: true
 
 # Training parameters
-N_epochs: 7
+N_epochs: 3
 batch_size: 1 #3
-lr: 0.001 #0.003
+lr: 0.00015 #0.003
 clip_grad_norm: 5
 loss_upper_lim: 999999  # this is the upper limit for an acceptable loss
 # if True, the training sequences are cut to a specified length
@@ -138,13 +138,12 @@ dacmodel: !new:speechbrain.lobes.models.codecformer.MimiWrapper
   mimi_model_name: "kyutai/mimi"  # Specify the Mimi model identifier
   Freeze: true
 
-sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparator2
-        # dacmodel: !ref <dacmodel>
+sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparatorMimi
   num_spks: 2
   channels: 512 ## Note needs to be 512 for MimiWrapper
   block: !ref <block>
   block_channels: 512
-  activation: !new:torch.nn.LeakyReLU
+  activation: !new:torch.nn.ELU
 
 optimizer: !name:torch.optim.Adam
   lr: !ref <lr>
@@ -163,15 +162,11 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
 
 modules:
   sepmodel: !ref <sepmodel>
-  dacmodel: !ref <dacmodel>
-
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
   checkpoints_dir: !ref <save_folder>
   recoverables:
     sepmodel: !ref <sepmodel>
-    dacmodel: !ref <dacmodel>
     counter: !ref <epoch_counter>
     lr_scheduler: !ref <lr_scheduler>
-
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
   save_file: !ref <train_log>
