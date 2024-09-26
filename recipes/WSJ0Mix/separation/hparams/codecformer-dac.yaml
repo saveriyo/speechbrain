@@ -142,7 +142,7 @@ dacmodel: !new:speechbrain.lobes.models.codecformer.DACWrapper
   DAC_sample_rate: 16000
   Freeze: true
 
-sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparatorMimi
+sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparator2
         # dacmodel: !ref <dacmodel>
   num_spks: 2
   channels: 1024
