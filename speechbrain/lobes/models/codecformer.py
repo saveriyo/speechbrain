@@ -354,6 +354,8 @@ class simpleSeparatorMimi(nn.Module):
 
     def forward(self, x):
         # print(f"Initial input latents Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
+        
+        x = x.float()
         x = self.ch_down(x)
         # print(f"After ch_down Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
         
@@ -483,9 +485,15 @@ class MimiWrapper(nn.Module):
         # print(f"Decoding Min/Max: {x.min().item():.4f}, {x.max().item():.4f}")
 
         with torch.no_grad(): 
-            continuous_latents = self.model.quantizer.decode(x)
-            # print(f"Decoding Latents Min/Max/Avg: {continuous_latents.min().item():.4f}, {continuous_latents.max().item():.4f}, {continuous_latents.mean().item():.4f}")
-            embeddings = continuous_latents
+            if x.shape[1] == self.code_length:
+                x = x.long()
+                # print(x.min(), x.max())
+                # print("Decoding with quantizer")
+                embeddings = self.model.quantizer.decode(x)
+                # print(f"Decoding Latents Min/Max/Avg: {continuous_latents.min().item():.4f}, {continuous_latents.max().item():.4f}, {continuous_latents.mean().item():.4f}")
+            else:
+                embeddings = x
+
             embeddings = self.model.upsample(embeddings)
 
             decoder_outputs = self.model.decoder_transformer(
@@ -495,7 +503,6 @@ class MimiWrapper(nn.Module):
             decoded_audio = self.model.decoder(embeddings)
 
         # decoded_audio = self.model.decode(x)["audio_values"]
-
         # torchaudio.save("b.wav", decoded_audio.detach().squeeze(0).cpu(), self.mimi_sample_rate)
 
         decoded_audio = self.resample_audio(decoded_audio, to_mimi=False)

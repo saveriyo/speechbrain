@@ -47,12 +47,12 @@ save_audio: true # Save estimated sources on disk
 n_audio_to_save: 5
 sample_rate: 8000
 quantize_before: false
-quantize_after: true
+quantize_after: false
 
 # Training parameters
 N_epochs: 3
 batch_size: 1 #3
-lr: 0.00015 #0.003
+lr: 0.0015 #0.003
 clip_grad_norm: 5
 loss_upper_lim: 999999  # this is the upper limit for an acceptable loss
 # if True, the training sequences are cut to a specified length
@@ -140,7 +140,7 @@ dacmodel: !new:speechbrain.lobes.models.codecformer.MimiWrapper
 
 sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparatorMimi
   num_spks: 2
-  channels: 512 ## Note needs to be 512 for MimiWrapper
+  channels: 512
   block: !ref <block>
   block_channels: 512
   activation: !new:torch.nn.Tanh
