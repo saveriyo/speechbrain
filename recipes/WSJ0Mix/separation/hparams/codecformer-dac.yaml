@@ -12,9 +12,9 @@ __set_seed: !apply:torch.manual_seed [1234]
 
 # Data params
 # your base folder where this repo and other relevant files/repos are stored
-base_folder: /teamspace/studios/this_studio
+base_folder: /home/sam/Workspace/exploration/benchmarks
 # experiment folder name to generate in -/separation/results
-experiment_name: codecformer/DAC_original_L4nq
+experiment_name: codecformer/DAC
 
 # e.g. '/yourpath/wsj0-mix/2speakers'
 # end with 2speakers for wsj0-2mix or 3speakers for wsj0-3mix
@@ -142,7 +142,7 @@ dacmodel: !new:speechbrain.lobes.models.codecformer.DACWrapper
   DAC_sample_rate: 16000
   Freeze: true
 
-sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparator2
+sepmodel: !new:speechbrain.lobes.models.codecformer.simpleSeparatorMimi
         # dacmodel: !ref <dacmodel>
   num_spks: 2
   channels: 1024

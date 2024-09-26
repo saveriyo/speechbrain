@@ -57,6 +57,9 @@ class Separation(sb.Brain):
         # Unpack lists and put tensors in the right device
         mix, mix_lens = mix
         mix, mix_lens = mix.to(self.device), mix_lens.to(self.device)
+
+        # print(mix.shape)
+        # torchaudio.save("mix.wav", mix.detach().cpu(), self.hparams.sample_rate)
         
         #Send the dac model to device
         self.hparams.dacmodel.model.to(self.device)
@@ -151,7 +154,17 @@ class Separation(sb.Brain):
         #output is currently [Speakers, Batch, channels, Time]
         est_source = est_source.squeeze(2).permute(1,2,0)
         #final est_source needs to be [Batch, Time, Speakers]
-        
+
+        # print(est_source.shape)
+
+        # sources = est_source.permute(2, 0, 1)  # Now it's [Speakers, Time]
+        # sources = sources.squeeze(1)
+
+        # print(sources.shape)
+        # torchaudio.save("est_source.wav", sources.detach().cpu(), self.hparams.sample_rate)
+
+        # raise Exception
+
         return est_source, targets, targets_transmitted, mix_s, targ_w, mix_sq, targ_q, mix_sq_codes, targ_q_codes
 
     def compute_objectives(self, predictions, targets, mix_s, targ_w, mix_sq, targ_q, mix_sq_codes, targ_q_codes, stage):

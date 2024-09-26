@@ -326,6 +326,14 @@ class simpleSeparatorMimi(nn.Module):
         self.num_spks = num_spks 
         self.channels = channels  # Latent dimension from MimiWrapper
         self.block = block  # Sequence processing model (e.g., transformer or LSTM)
+        # def initialize_weights(module):
+        #     if isinstance(module, nn.Linear):
+        #         nn.init.xavier_uniform_(module.weight)
+        #         if module.bias is not None:
+        #             module.bias.data.fill_(0.01)
+
+        # self.block.apply(initialize_weights)
+
         self.ch_down = nn.Conv1d(channels, block_channels, 1, bias=False)  # Downsample latent dimension to block channels
         self.ch_up = nn.Conv1d(block_channels, channels, 1, bias=False)  # Upsample back to latent dimension
 
@@ -345,31 +353,32 @@ class simpleSeparatorMimi(nn.Module):
         )
 
     def forward(self, x):
-        """
-        Forward pass of the separator.
+        # print(f"Initial input latents Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
+        x = self.ch_down(x)
+        # print(f"After ch_down Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
         
-        Args:
-            x: The input tensor in the shape [Batch, Channels, Time] (latent features from MimiWrapper).
+        x = x.permute(0, 2, 1)
+        x_b = self.block(x)
+        # x_b = 0.5 * x_b
+        x_b = x_b.permute(0, 2, 1)
+        # print(f"After block Min/Max/Mean: {x_b.min().item()}, {x_b.max().item()}, {x_b.mean().item()}")
 
-        Returns:
-            Separated latent representations for each speaker in shape [spks, B, Channels, Time].
-        """
-        x = self.ch_down(x)  # Downsample channels to match block input
-        x = x.permute(0, 2, 1)  # Permute to [Batch, Time, Channels] for block processing
-        x_b = self.block(x)  # Process through block (sequence-to-sequence model)
-        x_b = x_b.permute(0, 2, 1)  # Permute back to [Batch, Channels, Time]
-        x = self.ch_up(x_b)  # Upsample back to original latent dimension
+        x = self.ch_up(x_b)
+        # print(f"After ch_up Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
 
-        B, N, L = x.shape  # B: Batch, N: Channels, L: Time
-        masks = self.masker(x)  # Create separation masks
-        masks = masks.view(B * self.num_spks, -1, L)  # Reshape for multiple speakers
+        B, N, L = x.shape
+        masks = self.masker(x)
+        # print(f"After masker Min/Max/Mean: {masks.min().item()}, {masks.max().item()}, {masks.mean().item()}")
+        
+        masks = masks.view(B * self.num_spks, -1, L)
+        x = self.output(masks) * self.output_gate(masks)
+        # print(f"After output and gate Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
 
-        x = self.output(masks) * self.output_gate(masks)  # Apply output and gate
-        x = self.activation(x)  # Apply activation function
+        x = self.activation(x)
+        # print(f"After activation Min/Max/Mean: {x.min().item()}, {x.max().item()}, {x.mean().item()}")
 
-        x = x.view(B, self.num_spks, N, L)  # Reshape to [Batch, num_spks, Channels, Time]
-        x = x.transpose(0, 1)  # Transpose to [spks, B, Channels, Time] for output
-
+        x = x.view(B, self.num_spks, N, L)
+        x = x.transpose(0, 1)
         return x
 
 
@@ -450,7 +459,20 @@ class MimiWrapper(nn.Module):
             embeddings = self.model.downsample(embeddings)
             continuous_latents = embeddings
             # codes = self.model.quantizer.encode(continuous_latents).transpose(0, 1)
+            # lats = self.model.quantizer.decode(codes)
+            # embeddings = self.model.upsample(lats)
 
+            # decoder_outputs = self.model.decoder_transformer(
+            #     embeddings.transpose(1, 2), return_dict=False
+            # )
+            # embeddings = decoder_outputs[0].transpose(1, 2)
+            # decoded_audio = self.model.decoder(embeddings)
+            # print(decoded_audio.shape)
+            # torchaudio.save("a.wav", decoded_audio.detach().squeeze(0).cpu(), self.mimi_sample_rate)
+
+        # print(continuous_latents.shape)
+        # print(f"Encoded Latents Min/Max/Avg: {continuous_latents.min().item():.4f}, {continuous_latents.max().item():.4f}, {continuous_latents.mean().item():.4f}")
+        # print(f"Encoded Codes Min/Max: {codes.min().item():.4f}, {codes.max().item():.4f}")
         return continuous_latents, original_length
 
     def get_decoded_signal(self, x: torch.Tensor, original_length: int) -> torch.Tensor:
@@ -458,8 +480,11 @@ class MimiWrapper(nn.Module):
         expects input [B, D, T] where D is the Quantized continuous representation of input
         original length is the original length of the input audio
         """
+        # print(f"Decoding Min/Max: {x.min().item():.4f}, {x.max().item():.4f}")
+
         with torch.no_grad(): 
             continuous_latents = self.model.quantizer.decode(x)
+            # print(f"Decoding Latents Min/Max/Avg: {continuous_latents.min().item():.4f}, {continuous_latents.max().item():.4f}, {continuous_latents.mean().item():.4f}")
             embeddings = continuous_latents
             embeddings = self.model.upsample(embeddings)
 
@@ -470,6 +495,8 @@ class MimiWrapper(nn.Module):
             decoded_audio = self.model.decoder(embeddings)
 
         # decoded_audio = self.model.decode(x)["audio_values"]
+
+        # torchaudio.save("b.wav", decoded_audio.detach().squeeze(0).cpu(), self.mimi_sample_rate)
 
         decoded_audio = self.resample_audio(decoded_audio, to_mimi=False)
 
