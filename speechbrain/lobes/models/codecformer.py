@@ -374,7 +374,7 @@ class simpleSeparatorMimi(nn.Module):
 
         x = x.view(B, self.num_spks, N, L)
         x = x.transpose(0, 1)
-        return 1 + 0.5 * torch.tanh(x)
+        return 1 + torch.tanh(x)
 
 
 class MimiWrapper(nn.Module):
