@@ -49,6 +49,25 @@ import torch.nn as nn
 from speechbrain.nnet.losses import PitWrapper
 
 
+def print_tensor_info(tensor, name):
+    """Prints out detailed information about the tensor."""
+    try:
+        print(f"Tensor: {name}")
+        print(f"Shape: {tensor.shape}")
+        print(f"Device: {tensor.device}")
+        print(f"Data type: {tensor.dtype}")
+        print(f"Min: {tensor.min().item()}")
+        print(f"Max: {tensor.max().item()}")
+        print(f"Mean: {tensor.mean().item()}")
+        print(f"Std Dev: {tensor.std().item()}")
+        print(f"Sum: {tensor.sum().item()}")
+        print(f"Is NaN: {torch.isnan(tensor).any().item()}")
+        print(f"Is Inf: {torch.isinf(tensor).any().item()}")
+        print("-" * 40)
+    except Exception as e:
+        print(f"Could not print info for tensor {name}: {e}")
+        print("-" * 40)
+
 # Define training procedure
 class Separation(sb.Brain):
     def compute_forward(self, mix, targets, stage, noise=None):
@@ -124,35 +143,49 @@ class Separation(sb.Brain):
         # Separation #
         ##############
         mix_w, mix_length = self.hparams.dacmodel.get_encoded_features(mix.unsqueeze(1))
-        
+
+        # Print encoded mix info
+        # print_tensor_info(mix_w, "Encoded Mix")
+
         if self.hparams.quantize_before:
             mix_w = self.hparams.dacmodel.get_quantized_features(mix_w)[0]
+            # print_tensor_info(mix_w, "Quantized Mix")
 
         est_mask = self.hparams.sepmodel(mix_w)
 
+        # Print estimated mask info
+        # print_tensor_info(est_mask, "Estimated Mask")
+
         mix_w = torch.stack([mix_w] * self.hparams.num_spks)
         mix_s = mix_w * est_mask
-        # mix_s = est_mask
+
+        # Print separated latent space info
+        # print_tensor_info(mix_s, "Separated Latents")
 
         if self.hparams.quantize_after:
             mix_qs = [self.hparams.dacmodel.get_quantized_features(mix_s[i]) for i in range(self.hparams.num_spks)]
+            mix_sq = torch.cat([item[0].unsqueeze(0) for item in mix_qs], dim=0)  # [spks, B, N, L]
+            mix_sq_codes = torch.cat([item[1].unsqueeze(0) for item in mix_qs], dim=0)
 
-            mix_sq = torch.cat([item[0].unsqueeze(0) for item in mix_qs],dim=0) #[spks, B, N, L]
-            mix_sq_codes = torch.cat([item[1].unsqueeze(0) for item in mix_qs],dim=0)
+            # Print post-quantization latents
+            # print_tensor_info(mix_sq, "Quantized Separated Latents")
         else:
             mix_sq = mix_s
             mix_sq_codes = 0
-        
+
         est_source = torch.cat(
             [
-                self.hparams.dacmodel.get_decoded_signal(mix_sq[i],mix_length).unsqueeze(0)
+                self.hparams.dacmodel.get_decoded_signal(mix_sq[i], mix_length).unsqueeze(0)
                 for i in range(self.hparams.num_spks)
             ],
             dim=0,
         )
 
-        #output is currently [Speakers, Batch, channels, Time]
-        est_source = est_source.squeeze(2).permute(1,2,0)
+        # Output is currently [Speakers, Batch, channels, Time]
+        est_source = est_source.squeeze(2).permute(1, 2, 0)
+
+        # Print estimated source info
+        # print_tensor_info(est_source, "Estimated Sources")
         #final est_source needs to be [Batch, Time, Speakers]
 
         # print(est_source.shape)

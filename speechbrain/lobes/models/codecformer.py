@@ -326,13 +326,6 @@ class simpleSeparatorMimi(nn.Module):
         self.num_spks = num_spks 
         self.channels = channels  # Latent dimension from MimiWrapper
         self.block = block  # Sequence processing model (e.g., transformer or LSTM)
-        # def initialize_weights(module):
-        #     if isinstance(module, nn.Linear):
-        #         nn.init.xavier_uniform_(module.weight)
-        #         if module.bias is not None:
-        #             module.bias.data.fill_(0.01)
-
-        # self.block.apply(initialize_weights)
 
         self.ch_down = nn.Conv1d(channels, block_channels, 1, bias=False)  # Downsample latent dimension to block channels
         self.ch_up = nn.Conv1d(block_channels, channels, 1, bias=False)  # Upsample back to latent dimension
@@ -381,7 +374,7 @@ class simpleSeparatorMimi(nn.Module):
 
         x = x.view(B, self.num_spks, N, L)
         x = x.transpose(0, 1)
-        return x
+        return 1 + 0.5 * torch.tanh(x)
 
 
 class MimiWrapper(nn.Module):
@@ -492,7 +485,8 @@ class MimiWrapper(nn.Module):
                 embeddings = self.model.quantizer.decode(x)
                 # print(f"Decoding Latents Min/Max/Avg: {continuous_latents.min().item():.4f}, {continuous_latents.max().item():.4f}, {continuous_latents.mean().item():.4f}")
             else:
-                embeddings = x
+                x = self.model.quantizer.encode(x).transpose(0, 1)
+                embeddings = self.model.quantizer.decode(x)                
 
             embeddings = self.model.upsample(embeddings)
 
